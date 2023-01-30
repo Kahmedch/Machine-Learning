@@ -1,0 +1,825 @@
+---
+title: "ML Project - Wine Quality And Pricing"
+author: "Mikheil Parunovi | Kawnain Ahmed Chowdhury"
+date: "`r Sys.Date()`"
+output: html_document
+---
+# Packages
+
+<br/> Loading the required R packages.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(ggplot2)
+library(randomForest)
+library(caret)
+library(ggdark)
+library(xgboost)
+library(Metrics)
+```
+
+# Data
+
+<br/> Reading in the data from *BordeauxWines.csv* into `wine_data` dataframe.
+
+```{r cars}
+# Reading in the data into
+setwd("/Users/mikheilparunovi/Desktop/MSBA/Machine Learning/Project ML")
+wine_data <- read.csv("./BordeauxWines.csv", header=T, stringsAsFactors=T)
+```
+
+## Data Manipulation
+
+<br/> Creating a new variable `c_price` to correct for formatting errors in the raw data, as well as adjust some prices to a single volume of $750ml$.
+
+```{r}
+# Creating variable and replacing non-750ml prices with corresponding prices per 750ml.
+price <- as.numeric(gsub("\\$", "", wine_data$Price))
+
+price[which(wine_data$Price == "$10/375ml")] <- 20
+price[which(wine_data$Price == "$22/375ml")] <- 44
+price[which(wine_data$Price == "$27/375ml")] <- 54
+price[which(wine_data$Price == "$20/375ml")] <- 40
+price[which(wine_data$Price == "$14/375ml")] <- 28
+price[which(wine_data$Price == "$15/375ml")] <- 30
+price[which(wine_data$Price == "$175/375ml")] <- 350
+price[which(wine_data$Price == "$190/375ml")] <- 380
+price[which(wine_data$Price == "$192/375ml")] <- 384
+price[which(wine_data$Price == "$195/375ml")] <- 390
+price[which(wine_data$Price == "$210/375ml")] <- 420
+price[which(wine_data$Price == "$220/375ml")] <- 440
+price[which(wine_data$Price == "$225/375ml")] <- 450
+price[which(wine_data$Price == "$23/375ml")] <- 46
+price[which(wine_data$Price == "$24/375ml")] <- 48
+price[which(wine_data$Price == "$25/375ml")] <- 50
+price[which(wine_data$Price == "$250/375ml")] <- 500
+price[which(wine_data$Price == "$30/375ml")] <- 60
+price[which(wine_data$Price == "$300/375ml")] <- 600
+price[which(wine_data$Price == "$32/375ml")] <- 64
+price[which(wine_data$Price == "$32/500ml")] <- 48
+price[which(wine_data$Price == "$35/375ml")] <- 70
+price[which(wine_data$Price == "$40/375ml")] <- 80
+price[which(wine_data$Price == "$45/375ml")] <- 90
+price[which(wine_data$Price == "$47/375ml")] <- 94
+price[which(wine_data$Price == "$48/375ml")] <- 96
+price[which(wine_data$Price == "$75/375ml")] <- 150
+price[which(wine_data$Price == "$NA/375ml")] <- "NA"
+price[which(wine_data$Price == "$NA/500ml")] <- "NA"
+price[which(wine_data$Price == "$NA/750ml")] <- "NA"
+
+price <- as.numeric(gsub("\\$", "", wine_data$Price))
+wine_data$c_price <- price
+
+# Creating model_data data frame from wine_data for future use.
+score_data <- wine_data
+price_data <- wine_data
+score_data <- score_data[,-1]       #Getting rid of `Wine` variable containing wine names
+score_data <- score_data[, -3]      #Getting rid of `Price` variable, since it does not affect the `Score` variable.
+score_data <- score_data[, -988]    #Getting rid of `c_price` variable, since it does not affect the `Score` variable.
+score_data <- score_data[, -1]      #Getting rid of `Year` variable, since the production year has no effect on wine's quality score.
+
+
+
+price_data <- price_data[,-1]         #Getting rid of `Wine` variable containing wine names.
+price_data <- price_data[,-3]         #Getting rid of `Price` variable
+colnames(price_data)[988] <- "Price"  #Renaming `c_price` variable into `Price`.
+
+price_data <- na.omit(price_data)     #Dropping rows with NAs from `price_data`,
+```
+
+# Summary Statistics
+
+<br/>Simple overview of the summery statistics for the dataset.
+
+```{r}
+sum(is.na(score_data$Score))
+sum(!is.na(score_data$Score))
+
+sum(is.na(price_data$Price))
+sum(!is.na(price_data$Price))
+
+dim(score_data)
+str(score_data)
+
+dim(price_data)
+str(price_data)
+
+summary(score_data)
+summary(score_data$Score)
+
+summary(price_data)
+summary(price_data$Price)
+```
+
+## Plots
+
+<br/> Plotting some meaningful relations to explore the data.
+```{r pressure, echo=FALSE}
+price_score_box <- boxplot(price_data$Price~price_data$Score, xlab = "Score", ylab = "Price", main = "Score Vs Price")
+price_year_box <- boxplot(wine_data$Price~wine_data$Year, xlab = "Year", ylab = "Price", main = "Year Vs Price")
+
+hist_score <- hist(score_data$Score, xlab = "Wine Score", main = "Distribution of Wine Scores")
+hist_price <- hist(price_data$Price, xlab = "Wine Price", main = "Distribution of Wine Prices")
+```
+
+## GGPlot Plots
+
+<br/> Further data visualization using ggplot2 package.
+
+```{r}
+plot_score <- ggplot(score_data, aes(x = Score)) +
+  geom_density(fill = "green", alpha = 0.3) + 
+  dark_theme_bw() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank()) +
+  labs(x = "Wine Scores",
+       title = "Density Plot of Wine Scores")
+plot_score
+
+plot_price <- ggplot(price_data, aes(x = Price)) +
+  geom_density(fill = "yellow", alpha = 0.3) + 
+  dark_theme_bw() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank()) +
+  labs(x = "Wine Prices",
+       title = "Density Plot of Wine Prices")
+
+plot_price
+
+plot_price_score <- ggplot(price_data, aes(x = Score, y = Price)) +
+  geom_point(fill = "red", alpha = 0.3) + 
+  geom_smooth()+
+  dark_theme_bw() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank()) +
+  labs(x = "Wine Scores",
+       y = "Wine Prices",
+       title = "Scatter Plot of Wine Prices Vs Scores")
+plot_price_score
+```
+
+## Data Partitioning:
+
+<br/> The `score_data` dataset is used for modeling with **Score** variable being dependent and the rest of variable being explanatory. Since the dataset contains over 14,000 observations, the 70-30% split for data partitioning is chosen. 
+
+```{r}
+score_obs <- nrow(score_data)
+
+set.seed(4)
+score_indicies <- sample(1:score_obs, 0.70*score_obs)
+
+score_train <- score_data[score_indicies,]
+score_test <- score_data[-score_indicies,]
+
+nlevels(factor(score_train$Score))
+nlevels(factor(score_test$Score))
+
+
+price_obs <- nrow(price_data)
+
+set.seed(4)
+price_indicies <- sample(1:price_obs, 0.70*price_obs)
+
+price_train <- price_data[price_indicies,]
+price_test <- price_data[-price_indicies,]
+
+nlevels(factor(price_train$Score))
+nlevels(factor(price_test$Score))
+```
+
+# Random Forest:
+
+```{r}
+#Random Forest - Start
+set.seed(4)
+rf_model_start <- randomForest(Score ~., 
+                         data = score_train, 
+                         ntree = 100,
+                         nodesize = 1,
+                         mtry = 5) 
+
+varImpPlot(rf_model_start, type =2, n.var = 10) 
+
+rf_start_preds <- predict(rf_model_start, score_test, type = "response") 
+
+r_start <- rmse(score_test$Score, rf_start_preds)
+plot_rf_start <- cbind.data.frame(score_test$Score, rf_start_preds)
+
+names(plot_rf_start) <- c("Actual", "Predicted")
+
+
+plot_rf_start$col <- log(abs(plot_rf_start$Actual - plot_rf_start$Predicted) + 1)
+
+rf_start_plot <- ggplot(plot_rf_start, aes(x = Actual, y = Predicted, color = col)) +  
+  geom_point() +
+  geom_smooth()+
+  scale_color_gradient(low = "blue", high = "red") +
+  dark_theme_bw() + 
+  theme(axis.line = element_line(colour = "white"), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(), 
+        panel.background = element_blank(),
+        plot.subtitle = element_text(face = "italic")) +
+  labs(x = "Actual Wine Score", y = "Predicted Wine Score",
+       title = "Predicted vs Actual Wine Score",
+       subtitle = paste("Ramdom Forest - RMSE:", r_start),
+       color = "Deviation from\nactual score")
+
+rf_start_plot
+```
+
+<br/> The initial *Random Forest* model (`rf_model_start`) has the error of *RMSE = 2.9355*. The model is performing well enough to capture the relationships and make good enough predictions. However, tuning the right value for `mtry` and `nodesize` parameters can potentially improve the predictive capabilities of the model.
+<br/> For `rf_model_start` the *Variable Importance* plot suggest that the following five predictors are the most important ones for the model:
+- `Long`
+- `Great`
+- `Medium.Bodied`
+- `Character`
+- `Black.Currant`
+
+## Random Forest: Parameter Tuning
+
+```{r}
+#Random Forest - Tuning `mtry` parameter.
+
+mtry_values <- c(86, 87, 88, 89, 90)
+
+r_mtry <- 0
+j <- 1
+
+length(r_mtry) <- length(mtry_values)
+
+for(i in mtry_values){
+       set.seed(4)
+       rf_model_mtry <-  randomForest(Score ~., 
+                                    data = score_train, 
+                                    ntree = 100,
+                                    nodesize = 1,
+                                    mtry = i) 
+
+      rf_mtry_preds <- predict(rf_model_mtry, score_test, type = "response")
+
+      r_mtry[j] <- rmse(score_test$Score, rf_mtry_preds)
+
+      j <- j + 1
+}
+
+r_mtry
+which.min(r_mtry)
+
+#Random Forest - Tuning `nodesize` parameter.
+
+nodesize_values <- c(1, 6, 7, 8, 9)
+
+r_nodesize <- 0
+j <- 1
+
+length(r_nodesize) <- length(nodesize_values)
+
+for(i in nodesize_values){
+      set.seed(4)
+      rf_model_nodesize <-  randomForest(Score ~., 
+                                        data = score_train, 
+                                        ntree = 100,
+                                        nodesize = i,
+                                        mtry = 87) 
+
+      rf_nodesize_preds <- predict(rf_model_nodesize, score_test, type = "response")
+
+      r_nodesize[j] <- rmse(score_test$Score, rf_nodesize_preds)
+
+      j <- j + 1
+}
+
+r_nodesize
+which.min(r_nodesize)
+# Nodesize = 7
+```
+
+<br/> To tune the Random Forest model, several *for-loops* for `mtry` and `nodesize` parameters have been run to ensure the most optimal parameter values have been selected. As a result, the lowest *RMSE* was achieved with `mtry`=87 and `nodesize`=7 values.
+
+## Random Forest: Final Model
+
+```{r}
+# Running final model with tuned `mtry` and `nodesize` parameters.
+set.seed(4)
+rf_model_final <- randomForest(Score ~., 
+                              data = score_train, 
+                              ntree = 150,
+                              nodesize = 7,
+                              mtry = 87)
+
+
+varImpPlot(rf_model_final, type =2, n.var = 10) 
+
+
+rf_final_preds <- predict(rf_model_final, score_test, type = "response") 
+
+r_final <- rmse(score_test$Score, rf_final_preds)
+plot_rf_final <- cbind.data.frame(score_test$Score, rf_final_preds)
+
+names(plot_rf_final) <- c("Actual", "Predicted")
+
+plot_rf_final$col <- log(abs(plot_rf_final$Actual - plot_rf_final$Predicted) + 1)
+
+rf_final_plot <- ggplot(plot_rf_final, aes(x = Actual, y = Predicted, color = col)) + 
+  geom_point() +
+  geom_smooth()+
+  scale_color_gradient(low = "blue", high = "red") +
+  dark_theme_bw() + 
+  theme(axis.line = element_line(colour = "white"), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(), 
+        panel.background = element_blank(),
+        plot.subtitle = element_text(face = "italic")) +
+  labs(x = "Actual Wine Score", y = "Predicted Wine Score",
+       title = "Predicted vs Actual Wine Score",
+       subtitle = paste("Ramdom Forest - RMSE:", r_final),
+       color = "Deviation from\nactual score")
+
+rf_final_plot
+```
+
+<br/> The final *Random Forest* model (`rf_model_final`) has the error of *RMSE = 2.0394*, a significant improvement from the initial value of *2.9355*. The model is performing significantly better at capturing the relationships and making good predictions for wine scores. 
+<br/> For `rf_model_final` the *Variable Importance* plot suggest that the following five predictors are the most important ones for the model:
+- `Great`
+- `Long`
+- `Medium.Bodied`
+- `Character`
+- `Light.Bodied`
+<br/> As we can see, the importance of most of the predictors has been retained in the final model, with `great` predictor now being the most important variable for the model.
+
+## Random Forest: Price
+```{r}
+# Random Forest with `Price` as dependent variable.
+rf_model_price <- randomForest(Price ~., 
+                              data = price_train, 
+                              ntree = 150,
+                              nodesize = 7,
+                              mtry = 87)
+
+
+varImpPlot(rf_model_price, type =2, n.var = 10) 
+
+
+rf_price_preds <- predict(rf_model_price, price_test, type = "response") 
+
+r_price <- rmse(price_test$Price, rf_price_preds)
+
+plot_rf_price <- cbind.data.frame(price_test$Price, rf_price_preds)
+
+names(plot_rf_price) <- c("Actual", "Predicted")
+
+
+plot_rf_price$col <- log(abs(plot_rf_price$Actual - plot_rf_price$Predicted) + 1)
+
+
+rf_price_plot <- ggplot(plot_rf_price, aes(x = Actual, y = Predicted, color = col)) + 
+  geom_point() +
+  geom_smooth()+
+  scale_color_gradient(low = "blue", high = "red") +
+  dark_theme_bw() + 
+  theme(axis.line = element_line(colour = "white"), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(), 
+        panel.background = element_blank(),
+        plot.subtitle = element_text(face = "italic")) +
+  labs(x = "Actual Wine Price", y = "Predicted Wine Price",
+       title = "Predicted vs Actual Wine Price",
+       subtitle = paste("Ramdom Forest - RMSE:", r_price),
+       color = "Deviation from\nactual score")
+
+rf_price_plot
+```
+
+<br/> Running the Random Forest model with `Price` as a dependent variable using the parameters tuned for the `Score` variable, we can observe that the model does perform well for the lower values of Price. However, significant errors in predictions arise once the Price reaches approximately 200$. This is intuitive, considering that the price of wine largely depends on its score, rather than the components that go into the wine itself. With only a few observations at high levels of Price, the model is incapable of identifying patterns at those levels.
+
+# XGBoost Tuning: Data Preparation
+
+```{r}
+# Data preparation for XGBoost
+dtrain_score <- xgb.DMatrix(data = as.matrix(score_train[, 2:986]), label = as.numeric(score_train$Score) -1)
+dtest_score <- xgb.DMatrix(data = as.matrix(score_test[, 2:986]), label = as.numeric(score_test$Score) - 1)
+
+dtrain_price <- xgb.DMatrix(data = as.matrix(price_train[, 1:987]), label = as.numeric(price_train$Price) -1)
+dtest_price <- xgb.DMatrix(data = as.matrix(price_test[, 1:987]), label = as.numeric(price_test$Price) - 1)
+```
+
+<br/> Creating `d_train` and `d_test` datasets for `score` and `price` respectively to prepare the data for XGBoost models.
+
+```{r}
+set.seed(4)
+xg_model_start <- xgboost(data = dtrain_score, 
+                     
+                    nfold = 5, 
+                    
+                    eta = 0.5, 
+                    max.depth = 5, 
+                    min_child_weight = 5, 
+                    gamma = 0.2, 
+                    subsample = 0.1, 
+                    colsample_bytree =  0.1, 
+                    
+                    nrounds = 100, 
+                    early_stopping_rounds = 20, 
+                    
+                    verbose = 1, 
+                    nthread = 1, 
+                    print_every_n = 20 
+                     
+) 
+
+xg_start_preds <- predict(xg_model_start, dtest_score)
+
+xg_pred_start <- cbind.data.frame(xg_start_preds, score_test$Score)
+names(xg_pred_start) <- c("Predicted", "Actual")
+
+xg_pred_start$col <- log(abs(xg_pred_start$Actual - xg_pred_start$Predicted) + 1)
+
+rmse_xg_start <- rmse(score_test$Score, xg_start_preds)
+
+xg_start_plot <- ggplot(xg_pred_start, aes(x = Actual, y = Predicted, color = col)) + 
+  geom_point() +
+  geom_smooth()+
+  scale_color_gradient(low = "blue", high = "red") +
+  dark_theme_bw() + 
+  theme(axis.line = element_line(colour = "white"), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(), 
+        panel.background = element_blank(),
+        plot.subtitle = element_text(face = "italic")) +
+  labs(x = "Actual Wine Score", y = "Predicted Wine Score",
+       title = "Predicted vs Actual Wine Score",
+       subtitle = paste("XGBoost - RMSE:", rmse_xg_start),
+       color = "Deviation from\nactual score")
+xg_start_plot
+
+imp_mat_start <- xgb.importance(model = xg_model_start)
+xgb.plot.importance(imp_mat_start, top_n = 10)
+
+xg_price_start <- xgboost(data = dtrain_price, 
+                     
+                    nfold = 5, 
+                    
+                    eta = 0.5, 
+                    max.depth = 5, 
+                    min_child_weight = 5, 
+                    gamma = 0.2, 
+                    subsample = 0.1, 
+                    colsample_bytree =  0.1, 
+                    
+                    nrounds = 100, 
+                    early_stopping_rounds = 20, 
+                    
+                    verbose = 1, 
+                    nthread = 1, 
+                    print_every_n = 20 
+                     
+) 
+
+xg_price_start_preds <- predict(xg_price_start, dtest_price)
+
+xg_pred_start_price <- cbind.data.frame(xg_price_start_preds, price_test$Price)
+names(xg_pred_start_price) <- c("Predicted", "Actual")
+
+xg_pred_start_price$col <- log(abs(xg_pred_start_price$Actual - xg_pred_start_price$Predicted) + 1)
+
+rmse_xg_start_price <- rmse(price_test$Price, xg_price_start_preds)
+
+xg_start_price_plot <- ggplot(xg_pred_start_price, aes(x = Actual, y = Predicted, color = col)) + 
+  geom_point() +
+  geom_smooth()+
+  scale_color_gradient(low = "blue", high = "red") +
+  dark_theme_bw() + 
+  theme(axis.line = element_line(colour = "white"), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(), 
+        panel.background = element_blank(),
+        plot.subtitle = element_text(face = "italic")) +
+  labs(x = "Actual Wine Price", y = "Predicted Wine Price",
+       title = "Predicted vs Actual Wine Price",
+       subtitle = paste("XGBoost - RMSE:", rmse_xg_start_price),
+       color = "Deviation from\nactual score")
+xg_start_price_plot
+```
+
+<br/> The first run of XGBoost model (`xg_model_start`) has proven to *already* be better at predicted the wine scores than the Random Forest. The *RMSE=2.3965* is beating the tuned RF model at predicting the values. However, tuning the correct values for `max_depth`, `min_child_weight`, `gamma`, `subsample`, `col_sample_by_tree` and `eta` parameters could significantly improve the accuracy of the model.
+
+## XGBoost Tuning: Tuning `max_depth_vals` and `min_child_weight` parameters.
+
+```{r}
+max_depth_vals <- c(3, 5, 7, 10, 15)
+min_child_weight <- c(1, 3, 5, 7, 10, 15) 
+
+cv_params <- expand.grid(max_depth_vals, min_child_weight)
+names(cv_params) <- c("max_depth", "min_child_weight")
+
+rmse_vec  <- rep(NA, nrow(cv_params)) 
+
+for(i in 1:nrow(cv_params)){
+  set.seed(4)
+  bst_maxmin <- xgb.cv(data = dtrain_score, 
+                     
+                     nfold = 5, 
+                     
+                     eta = 0.1, 
+                     max.depth = cv_params$max_depth[i], 
+                     min_child_weight = cv_params$min_child_weight[i], 
+                     
+                     
+                     nrounds = 100, 
+                     early_stopping_rounds = 20, 
+                     
+                     verbose = 1, 
+                     nthread = 1, 
+                     print_every_n = 20 
+                     
+  ) 
+  
+  rmse_vec[i] <- bst_maxmin$evaluation_log$test_rmse_mean[bst_maxmin$best_ntreelimit]
+  
+}
+
+rmse_vec
+which.min(rmse_vec)
+cv_params
+
+# Max_Depth = 15; Min_child_weight = 10.
+
+rmse_maxmin <- cbind.data.frame(cv_params, rmse_vec)
+names(rmse_maxmin)[3] <- c("rmse") 
+rmse_maxmin$max_depth <- as.factor(rmse_maxmin$max_depth) 
+rmse_maxmin$min_child_weight <- as.factor(rmse_maxmin$min_child_weight) 
+
+maxmin_tune_plot <- ggplot(rmse_maxmin, aes(y = max_depth, x = min_child_weight, fill = rmse)) + 
+  geom_tile() + 
+  dark_theme_bw() + 
+  scale_fill_gradient2(low = "blue", 
+                       mid = "white", 
+                       high = "red", 
+                       midpoint =mean(rmse_maxmin$rmse), 
+                       space = "Lab", 
+                       na.value ="grey", 
+                       guide = "colourbar", 
+                       aesthetics = "fill") + 
+  labs(x = "Minimum Child Weight", y = "Max Depth", fill = "RMSE") 
+maxmin_tune_plot 
+```
+
+<br/> Running multiple *for-loops* while continuously updating the values for `max_depth` and `min_child_weight` parameters has landed us at the following values for the given parameters:
+- `max_depth` = 15
+- `min_child_weight` = 10
+
+## XGBoost Tuning: Tuning `gamma` parameter.
+
+```{r}
+#Gamma Tuning
+
+gamma_vals <- c(0.2, 0.3, 0.4, 0.45, 0.5) 
+
+rmse_vec_gamma  <- rep(NA, length(gamma_vals))
+for(i in 1:length(gamma_vals)){
+  set.seed(4)
+  bst_gamma <- xgb.cv(data = dtrain_score,
+                     
+                     nfold = 5, 
+                     
+                     eta = 0.1, 
+                     max.depth = 15, 
+                     min_child_weight = 10, 
+                     gamma = gamma_vals[i], 
+                     
+                     nrounds = 100, 
+                     early_stopping_rounds = 20, 
+                     
+                     verbose = 1, 
+                     nthread = 1, 
+                     print_every_n = 20 
+  ) 
+  
+  rmse_vec_gamma[i] <- bst_gamma$evaluation_log$test_rmse_mean[bst_gamma$best_ntreelimit]
+  
+}
+
+rmse_gamma <- cbind.data.frame(gamma_vals, rmse_vec_gamma)
+rmse_gamma
+which.min(rmse_gamma$rmse_vec_gamma)
+#Gamma=0.2
+```
+
+<br/> Tuning `gamma` parameter resulted in lowest RMSE being achieved at the value of *0.2*.
+
+## XGBoost Tuning: Tuning `subsample` and `colsample_bytree` parameters.
+
+```{r}
+# Sub Sample and Column Sample Tuning
+subsample <- c(0.6, 0.7, 0.8, 0.9, 1) 
+colsample_by_tree <- c(0.6, 0.7, 0.8, 0.9, 1)
+
+
+cv_params_sample <- expand.grid(subsample, colsample_by_tree)
+names(cv_params_sample) <- c("subsample", "colsample_by_tree")
+
+rmse_vec_sample <- rep(NA, nrow(cv_params_sample)) 
+
+for(i in 1:nrow(cv_params_sample)){
+  set.seed(4)
+  bst_sample <- xgb.cv(data = dtrain_score, 
+                     
+                     nfold = 5, 
+                     
+                     eta = 0.1, 
+                     max.depth = 15, 
+                     min_child_weight = 10, 
+                     gamma = 0.2, 
+                     subsample = cv_params_sample$subsample[i], 
+                     colsample_bytree = cv_params_sample$colsample_by_tree[i], 
+                     
+                     nrounds = 100, 
+                     early_stopping_rounds = 20, 
+                     
+                     verbose = 1, 
+                     nthread = 1, 
+                     print_every_n = 20 
+  ) 
+  
+  rmse_vec_sample[i] <- bst_sample$evaluation_log$test_rmse_mean[bst_sample$best_ntreelimit]
+  
+}
+
+rmse_vec_sample
+which.min(rmse_vec_sample)
+cv_params_sample
+
+#Sub_sample = 0.8; Colsample_by_tree = 0.9.
+
+
+rmse_sample <- cbind.data.frame(cv_params_sample, rmse_vec_sample)
+names(rmse_sample)[3] <- c("rmse") 
+rmse_sample$subsample <- as.factor(rmse_sample$subsample) 
+rmse_sample$colsample_by_tree <- as.factor(rmse_sample$colsample_by_tree) 
+
+sample_tune_plot <- ggplot(rmse_sample, aes(y = colsample_by_tree, x = subsample, fill = rmse_vec_sample)) + 
+  geom_tile() + 
+  dark_theme_bw() + 
+  scale_fill_gradient2(low = "blue", 
+                       mid = "white", 
+                       high = "red", 
+                       midpoint =mean(rmse_sample$rmse), 
+                       space = "Lab", 
+                       na.value ="grey", 
+                       guide = "colourbar", 
+                       aesthetics = "fill") + 
+  labs(x = "Subsample", y = "Column Sample by Tree", fill = "RMSE") 
+sample_tune_plot 
+```
+
+```{r}
+eta_vals <- c(0.3, 0.1, 0.05, 0.01, 0.005) 
+
+rmse_vec_eta  <- rep(NA, length(eta_vals))
+
+for(i in 1:length(eta_vals)){
+set.seed(4)
+bst_eta <- xgb.cv(data = dtrain_score, 
+                    
+                    nfold = 5, 
+                    
+                    eta = eta_vals[i], 
+                    max.depth = 15, 
+                    min_child_weight = 10, 
+                    gamma = 0.2, 
+                    subsample = 0.8, 
+                    colsample_bytree = 0.9, 
+                    
+                    nrounds = 1000, 
+                    early_stopping_rounds = 20, 
+                    
+                    verbose = 1, 
+                    nthread = 1, 
+                    print_every_n = 20 
+  ) 
+
+  rmse_vec_eta[i] <- bst_eta$evaluation_log$test_rmse_mean[bst_eta$best_ntreelimit]
+
+}
+
+rmse_vec_eta
+which.min(rmse_vec_eta)
+
+# Eta = 0.05
+```
+
+
+```{r}
+set.seed(4)
+xg_model_final <- xgboost(data = dtrain_score,
+                    
+                    nfold = 5, 
+                    
+                    eta = 0.05, 
+                    max.depth = 15, 
+                    min_child_weight = 10, 
+                    gamma = 0.2, 
+                    subsample = 0.8, 
+                    colsample_bytree =  0.9, 
+                    
+                    nrounds = 1000, 
+                    early_stopping_rounds = 20, 
+                    
+                    verbose = 1, 
+                    nthread = 1, 
+                    print_every_n = 20 
+) 
+
+xg_model_preds <- predict(xg_model_final, dtest_score)
+
+xg_pred_data <- cbind.data.frame(xg_model_preds, score_test$Score)
+names(xg_pred_data) <- c("Predicted", "Actual")
+
+xg_pred_data$col <- log(abs(xg_pred_data$Actual - xg_pred_data$Predicted) + 1)
+
+rmse_xg_final <- rmse(score_test$Score, xg_model_preds)
+
+xg_final_plot <- ggplot(xg_pred_data, aes(x = Actual, y = Predicted, color = col)) + 
+  geom_point() +
+  geom_smooth()+
+  scale_color_gradient(low = "blue", high = "red") +
+  dark_theme_bw() + 
+  theme(axis.line = element_line(colour = "white"), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(), 
+        panel.background = element_blank(),
+        plot.subtitle = element_text(face = "italic")) +
+  labs(x = "Actual Wine Score", y = "Predicted Wine Score",
+       title = "Predicted vs Actual Wine Score",
+       subtitle = paste("XGBoost - RMSE:", rmse_xg_final),
+       color = "Deviation from\nactual score")
+xg_final_plot
+
+imp_mat_final <- xgb.importance(model = xg_model_final)
+xgb.plot.importance(imp_mat_final, top_n = 10)
+
+# XGBoost - Price
+set.seed(4)
+xg_model_price <- xgboost(data = dtrain_price, 
+                    
+                    nfold = 5, 
+                    
+                    eta = 0.05, 
+                    max.depth = 15, 
+                    min_child_weight = 10,
+                    gamma = 0.2, 
+                    subsample = 0.8, 
+                    colsample_bytree =  0.9, 
+                    
+                    nrounds = 1000, 
+                    early_stopping_rounds = 20, 
+                    
+                    verbose = 1,
+                    nthread = 1, 
+                    print_every_n = 20 
+) 
+
+xg_price_preds <- predict(xg_model_price, dtest_price)
+
+xg_pred_price <- cbind.data.frame(xg_price_preds, price_test$Price)
+names(xg_pred_price) <- c("Predicted", "Actual")
+
+xg_pred_price$col <- log(abs(xg_pred_price$Actual - xg_pred_price$Predicted) + 1)
+
+rmse_xg_price <- rmse(price_test$Price, xg_price_preds)
+
+xg_price_plot <- ggplot(xg_pred_price, aes(x = Actual, y = Predicted, color = col)) + 
+  geom_point() +
+  geom_smooth()+
+  scale_color_gradient(low = "blue", high = "red") +
+  dark_theme_bw() + 
+  theme(axis.line = element_line(colour = "white"), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(), 
+        panel.background = element_blank(),
+        plot.subtitle = element_text(face = "italic")) +
+  labs(x = "Actual Wine Price", y = "Predicted Wine Price",
+       title = "Predicted vs Actual Wine Price",
+       subtitle = paste("XGBoost - RMSE:", rmse_xg_price),
+       color = "Deviation from\nactual score")
+xg_price_plot
+
+imp_mat_price <- xgb.importance(model = xg_model_price)
+xgb.plot.importance(imp_mat_price, top_n = 10)
+```
